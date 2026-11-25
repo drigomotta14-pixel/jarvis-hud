@@ -8,15 +8,30 @@
   // ------------------------------------------------------------------------
   // Estado global da aplicação
   // ------------------------------------------------------------------------
+  const ALLOWED_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+    "gemini-4-argon",
+  ];
+  const DEFAULT_MODEL = "gemini-3.8-flash";
+
   const STORAGE = {
     PIN: "jarvis_pin",
     MUTED: "jarvis_muted",
     RATE: "jarvis_tts_rate",
     HANDSFREE: "jarvis_handsfree",
+    MODEL: "jarvis_model",
   };
+
+  function getStoredModel() {
+    const saved = (localStorage.getItem(STORAGE.MODEL) || "").trim();
+    return ALLOWED_MODELS.includes(saved) ? saved : null;
+  }
 
   const state = {
     pin: localStorage.getItem(STORAGE.PIN) || "",
+    selectedModel: getStoredModel() || DEFAULT_MODEL,
     coreStatus: "idle", // idle | listening | processing | speaking
     muted: localStorage.getItem(STORAGE.MUTED) === "true",
     ttsRate: parseFloat(localStorage.getItem(STORAGE.RATE) || "1.12") || 1.12,
@@ -52,6 +67,7 @@
     appShell: document.getElementById("app-shell"),
     connectionDot: document.getElementById("connection-dot"),
     brtClock: document.getElementById("brt-clock"),
+    modelSelect: document.getElementById("model-select"),
     apiWarningChip: document.getElementById("api-warning-chip"),
     installPwaBtn: document.getElementById("install-pwa-btn"),
     drawerToggleBtn: document.getElementById("drawer-toggle-btn"),
@@ -1151,12 +1167,29 @@
     };
     appendMessage(optimisticUserMsg);
 
-    const formData = new FormData();
-    formData.append("message", trimmed);
-    formData.append("voice_mode", String(Boolean(isVoiceMode)));
-    formData.append("session_id", "default");
+    let requestOptions;
     if (file) {
+      const formData = new FormData();
+      formData.append("message", trimmed);
+      formData.append("voice_mode", String(Boolean(isVoiceMode)));
+      formData.append("session_id", "default");
+      formData.append("model", state.selectedModel);
       formData.append("file", file, file.name);
+      requestOptions = {
+        method: "POST",
+        body: formData,
+      };
+    } else {
+      requestOptions = {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          voice_mode: Boolean(isVoiceMode),
+          session_id: "default",
+          model: state.selectedModel,
+        }),
+      };
     }
 
     el.messageInput.value = "";
@@ -1166,10 +1199,7 @@
     const typingNode = appendTypingIndicator();
 
     try {
-      const data = await apiFetch("/api/chat", {
-        method: "POST",
-        body: formData,
-      });
+      const data = await apiFetch("/api/chat", requestOptions);
 
       typingNode.remove();
 
@@ -1210,8 +1240,19 @@
   // ------------------------------------------------------------------------
   // Status, Estatísticas e Dados Persistentes (Drawer)
   // ------------------------------------------------------------------------
+  function syncModelUI() {
+    if (!ALLOWED_MODELS.includes(state.selectedModel)) {
+      state.selectedModel = DEFAULT_MODEL;
+    }
+    if (el.modelSelect) el.modelSelect.value = state.selectedModel;
+    if (el.modelTag) el.modelTag.textContent = state.selectedModel;
+  }
+
   function applyServerStatus(data) {
-    if (data.model) el.modelTag.textContent = data.model;
+    if (!getStoredModel() && data.model && ALLOWED_MODELS.includes(data.model)) {
+      state.selectedModel = data.model;
+    }
+    syncModelUI();
     const ok = Boolean(data.api_key_configured);
     el.apiWarningChip.classList.toggle("hidden", ok);
     el.connectionDot.classList.toggle("warn", !ok);
@@ -1413,6 +1454,18 @@
       localStorage.setItem(STORAGE.RATE, String(state.ttsRate));
       showToast(`Velocidade da voz: ${state.ttsRate}x`);
     });
+
+    if (el.modelSelect) {
+      el.modelSelect.addEventListener("change", () => {
+        const chosen = el.modelSelect.value;
+        if (!ALLOWED_MODELS.includes(chosen)) return;
+        state.selectedModel = chosen;
+        localStorage.setItem(STORAGE.MODEL, chosen);
+        syncModelUI();
+        const label = el.modelSelect.options[el.modelSelect.selectedIndex]?.textContent || chosen;
+        showToast(`Modelo ativo: ${label}`);
+      });
+    }
 
     // Atalhos rápidos & chips de boas-vindas
     document.addEventListener("click", (e) => {
@@ -1684,6 +1737,7 @@
     initPinLock();
     bindEvents();
     syncVoiceControlsUI();
+    syncModelUI();
     startBrtClock();
     startCoreCanvasLoop();
     registerServiceWorker();

@@ -1,5 +1,5 @@
 /* Service Worker do J.A.R.V.I.S. PWA */
-const CACHE_NAME = "jarvis-hud-v1";
+const CACHE_NAME = "jarvis-hud-v2";
 const APP_SHELL = [
   "/",
   "/manifest.json",

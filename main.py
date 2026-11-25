@@ -11,14 +11,15 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import database
 import tools
@@ -53,6 +54,16 @@ ALLOWED_MIME_TYPES = {
 }
 
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+ALLOWED_GEMINI_MODELS: tuple[str, ...] = (
+    "gemini-3.8-flash",
+    "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+    "gemini-4-argon",
+)
+
+
 def get_gemini_api_key() -> str:
     key = os.getenv("GEMINI_API_KEY", "").strip()
     if key in ("", "sua_chave_gemini_aqui", "your_api_key_here"):
@@ -61,7 +72,20 @@ def get_gemini_api_key() -> str:
 
 
 def get_gemini_model() -> str:
-    return os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+    return os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+
+def resolve_gemini_model(requested_model: str | None = None) -> str:
+    if requested_model is None or not requested_model.strip():
+        return get_gemini_model()
+    candidate = requested_model.strip()
+    if candidate not in ALLOWED_GEMINI_MODELS:
+        allowed_str = ", ".join(ALLOWED_GEMINI_MODELS)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Modelo inválido: '{candidate}'. Modelos permitidos: {allowed_str}.",
+        )
+    return candidate
 
 
 def get_jarvis_pin() -> str:
@@ -126,8 +150,9 @@ def build_system_instruction(voice_mode: bool) -> str:
 async def lifespan(_app: FastAPI):
     database.init_db()
     logger.info(
-        "J.A.R.V.I.S. inicializado | Modelo: %s | API Key configurada: %s | DB: %s",
+        "J.A.R.V.I.S. inicializado | Modelo ativo: %s | Modelos permitidos: %s | API Key configurada: %s | DB: %s",
         get_gemini_model(),
+        ", ".join(ALLOWED_GEMINI_MODELS),
         bool(get_gemini_api_key()),
         database.DB_PATH,
     )
@@ -187,16 +212,23 @@ class NoteCreate(BaseModel):
     tag: str = Field(default="geral", max_length=80)
 
 
+class ChatJsonRequest(BaseModel):
+    message: str = ""
+    voice_mode: bool = False
+    session_id: str = "default"
+    model: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Motor Gemini com Function Calling + Multimodal
 # ---------------------------------------------------------------------------
 
 
 FALLBACK_GEMINI_MODELS = [
-    "gemini-3.6-flash",
     "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-4-hydrogen",
+    "gemini-4-argon",
 ]
 
 
@@ -241,7 +273,9 @@ def _run_gemini_turn(
     file_bytes: bytes | None = None,
     file_mime: str | None = None,
     file_name: str | None = None,
-) -> tuple[str, list[dict[str, Any]]]:
+    model_name: str | None = None,
+) -> tuple[str, list[dict[str, Any]], str]:
+    active_model = model_name or get_gemini_model()
     api_key = get_gemini_api_key()
     if not api_key:
         return (
@@ -250,10 +284,10 @@ def _run_gemini_turn(
             "e reinicie o serviço para ativar meu núcleo cognitivo.\n\n"
             "Enquanto isso, todos os painéis locais de **Tarefas**, **Memórias** e **Notas** seguem operacionais.",
             [],
+            active_model,
         )
 
     client = _create_gemini_client(api_key)
-    model_name = get_gemini_model()
 
     contents: list[types.Content] = []
     for row in history_rows:
@@ -293,9 +327,9 @@ def _run_gemini_turn(
     final_text = ""
 
     for _round in range(MAX_TOOL_ROUNDS):
-        response, model_name = _generate_with_fallback(
+        response, active_model = _generate_with_fallback(
             client=client,
-            model_name=model_name,
+            model_name=active_model,
             contents=contents,
             config=config,
         )
@@ -341,7 +375,7 @@ def _run_gemini_turn(
     if not final_text:
         final_text = "Operação concluída, senhor. Como posso prosseguir?"
 
-    return final_text, executed_tools
+    return final_text, executed_tools, active_model
 
 
 # ---------------------------------------------------------------------------
@@ -350,8 +384,14 @@ def _run_gemini_turn(
 
 
 @app.get("/health")
-async def healthcheck() -> dict[str, str]:
-    return {"status": "online", "service": "jarvis"}
+@app.get("/api/health")
+async def healthcheck() -> dict[str, Any]:
+    return {
+        "status": "online",
+        "service": "jarvis",
+        "model": get_gemini_model(),
+        "allowed_models": list(ALLOWED_GEMINI_MODELS),
+    }
 
 
 @app.get("/", include_in_schema=False)
@@ -389,6 +429,7 @@ async def api_verify_pin(_pin: str = Depends(verify_pin)) -> dict[str, Any]:
     return {
         "authenticated": True,
         "model": get_gemini_model(),
+        "allowed_models": list(ALLOWED_GEMINI_MODELS),
         "api_key_configured": bool(get_gemini_api_key()),
         "clock": tools.obter_data_hora(),
         "stats": database.get_stats(),
@@ -400,6 +441,7 @@ async def api_status(_pin: str = Depends(verify_pin)) -> dict[str, Any]:
     return {
         "status": "online",
         "model": get_gemini_model(),
+        "allowed_models": list(ALLOWED_GEMINI_MODELS),
         "api_key_configured": bool(get_gemini_api_key()),
         "clock": tools.obter_data_hora(),
         "stats": database.get_stats(),
@@ -427,12 +469,54 @@ async def api_clear_history(
 
 @app.post("/api/chat")
 async def api_chat(
-    message: str = Form(default=""),
-    voice_mode: bool = Form(default=False),
-    session_id: str = Form(default="default"),
-    file: UploadFile | None = File(default=None),
+    request: Request,
     _pin: str = Depends(verify_pin),
 ) -> dict[str, Any]:
+    content_type = (request.headers.get("content-type") or "").lower()
+    message = ""
+    voice_mode = False
+    session_id = "default"
+    requested_model: str | None = None
+    file: StarletteUploadFile | None = None
+
+    if "application/json" in content_type:
+        try:
+            raw_body = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Corpo JSON inválido.") from exc
+        if not isinstance(raw_body, dict):
+            raise HTTPException(status_code=400, detail="O corpo JSON deve ser um objeto.")
+        try:
+            payload = ChatJsonRequest.model_validate(raw_body)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=exc.errors()) from exc
+        message = payload.message
+        voice_mode = payload.voice_mode
+        session_id = payload.session_id.strip() or "default"
+        requested_model = payload.model
+    else:
+        form = await request.form()
+        raw_message = form.get("message")
+        message = raw_message if isinstance(raw_message, str) else ""
+        raw_voice = form.get("voice_mode")
+        voice_mode = (
+            raw_voice.strip().lower() in ("1", "true", "yes", "on")
+            if isinstance(raw_voice, str)
+            else False
+        )
+        raw_session = form.get("session_id")
+        session_id = (
+            raw_session.strip() or "default"
+            if isinstance(raw_session, str)
+            else "default"
+        )
+        raw_model = form.get("model")
+        requested_model = raw_model if isinstance(raw_model, str) else None
+        raw_file = form.get("file")
+        if isinstance(raw_file, StarletteUploadFile):
+            file = raw_file
+
+    selected_model = resolve_gemini_model(requested_model)
     user_text = message.strip()
     file_bytes: bytes | None = None
     file_mime: str | None = None
@@ -486,7 +570,7 @@ async def api_chat(
     )
 
     try:
-        reply_text, executed_tools = await run_in_threadpool(
+        reply_text, executed_tools, used_model = await run_in_threadpool(
             _run_gemini_turn,
             history_before,
             user_text,
@@ -494,6 +578,7 @@ async def api_chat(
             file_bytes,
             file_mime,
             file_name,
+            selected_model,
         )
     except Exception as exc:
         logger.exception("Erro ao consultar o Gemini")
@@ -519,6 +604,7 @@ async def api_chat(
 
     return {
         "reply": reply_text,
+        "model": used_model,
         "user_message": user_msg,
         "assistant_message": assistant_msg,
         "tools_used": executed_tools,
