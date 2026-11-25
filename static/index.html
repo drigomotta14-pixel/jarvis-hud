@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="J.A.R.V.I.S. — Assistente pessoal executivo com voz, memória persistente, tarefas e análise multimodal para tablets Android.">
+  <meta name="theme-color" content="#070B14">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="J.A.R.V.I.S.">
+
+  <title>J.A.R.V.I.S. — Assistente Pessoal HUD</title>
+
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/static/icons/icon.svg">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icons/icon-192.png">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- =================================================================== -->
+  <!-- TELA DE BLOQUEIO POR PIN                                            -->
+  <!-- =================================================================== -->
+  <section id="lock-screen" class="lock-screen" aria-label="Desbloqueio por PIN">
+    <div class="lock-card">
+      <div class="lock-emblem" aria-hidden="true">
+        <span class="emblem-ring emblem-ring-outer"></span>
+        <span class="emblem-ring emblem-ring-inner"></span>
+        <span class="emblem-core"></span>
+      </div>
+
+      <h1 class="lock-title">J.A.R.V.I.S.</h1>
+      <p class="lock-subtitle">Sistema Pessoal Protegido — Insira seu PIN</p>
+
+      <div id="pin-dots" class="pin-dots" aria-live="polite">
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+      </div>
+
+      <div class="pin-input-wrap">
+        <input
+          id="pin-input"
+          type="password"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          placeholder="Digite o PIN"
+          aria-label="PIN de acesso"
+          maxlength="16"
+        >
+      </div>
+
+      <p id="pin-error" class="pin-error" role="alert"></p>
+
+      <div class="pin-keypad" role="group" aria-label="Teclado numérico do PIN">
+        <button type="button" class="key-btn" data-key="1">1</button>
+        <button type="button" class="key-btn" data-key="2">2</button>
+        <button type="button" class="key-btn" data-key="3">3</button>
+        <button type="button" class="key-btn" data-key="4">4</button>
+        <button type="button" class="key-btn" data-key="5">5</button>
+        <button type="button" class="key-btn" data-key="6">6</button>
+        <button type="button" class="key-btn" data-key="7">7</button>
+        <button type="button" class="key-btn" data-key="8">8</button>
+        <button type="button" class="key-btn" data-key="9">9</button>
+        <button type="button" class="key-btn key-muted" data-action="clear" aria-label="Limpar PIN">Limpar</button>
+        <button type="button" class="key-btn" data-key="0">0</button>
+        <button type="button" class="key-btn key-muted" data-action="backspace" aria-label="Apagar dígito">⌫</button>
+      </div>
+
+      <button id="pin-submit-btn" type="button" class="btn-primary lock-submit">
+        Autenticar Acesso
+      </button>
+    </div>
+  </section>
+
+  <!-- =================================================================== -->
+  <!-- INTERFACE PRINCIPAL HUD (TABLET PAISAGEM & RETRATO)                 -->
+  <!-- =================================================================== -->
+  <div id="app-shell" class="app-shell hidden">
+    <!-- Barra superior compacta (principalmente visível no modo retrato; ações no desktop) -->
+    <header class="hud-topbar">
+      <div class="brand-cluster">
+        <span class="status-dot" id="connection-dot" aria-hidden="true"></span>
+        <span class="brand-name">J.A.R.V.I.S.</span>
+        <span class="brand-divider" aria-hidden="true">/</span>
+        <time id="brt-clock" class="hud-clock" datetime="">--:--</time>
+        <span id="api-warning-chip" class="warning-chip hidden" title="Configure GEMINI_API_KEY no servidor">
+          API Key pendente
+        </span>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="install-pwa-btn" type="button" class="icon-pill hidden" title="Instalar aplicativo no tablet">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/>
+          </svg>
+          <span>Instalar</span>
+        </button>
+
+        <button id="drawer-toggle-btn" type="button" class="icon-pill" aria-label="Abrir painel de tarefas, memórias e notas">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M9 5h11M9 12h11M9 19h11M4 5h.01M4 12h.01M4 19h.01" stroke-linecap="round"/>
+          </svg>
+          <span>Painel</span>
+          <span id="pending-badge" class="badge-count hidden">0</span>
+        </button>
+
+        <button id="mute-btn-top" type="button" class="icon-btn" title="Alternar modo silencioso (Mudo)" aria-label="Alternar modo silencioso">
+          <svg class="icon-sound-on" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M11 5L6 9H3v6h3l5 4V5z"/>
+            <path d="M15.54 8.46a5 5 0 010 7.07M19.07 4.93a10 10 0 010 14.14" stroke-linecap="round"/>
+          </svg>
+          <svg class="icon-sound-off hidden" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M11 5L6 9H3v6h3l5 4V5z"/>
+            <path d="M23 9l-6 6M17 9l6 6" stroke-linecap="round"/>
+          </svg>
+        </button>
+
+        <button id="clear-chat-btn" type="button" class="icon-btn" title="Limpar conversa" aria-label="Limpar histórico do chat">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+            <path d="M3 6h18M8 6V4h8v2m-9 0l1 14h8l1-14" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+
+        <button id="lock-btn" type="button" class="icon-btn" title="Bloquear com PIN" aria-label="Bloquear interface">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="5" y="11" width="14" height="10" rx="2"/>
+            <path d="M8 11V7a4 4 0 018 0v4"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Grade principal responsiva (Paisagem: 2 colunas | Retrato: empilhado) -->
+    <div class="hud-workspace">
+      <!-- PAINEL ESQUERDO / SUPERIOR: NÚCLEO DE VOZ + ATALHOS -->
+      <aside class="hud-core-panel" aria-label="Núcleo de voz e atalhos rápidos">
+        <div class="core-stage">
+          <button
+            id="core-button"
+            type="button"
+            class="core-reactor"
+            data-state="idle"
+            aria-label="Toque para falar com o J.A.R.V.I.S."
+          >
+            <canvas id="core-canvas" width="440" height="440" aria-hidden="true"></canvas>
+            <span class="core-center-icon" aria-hidden="true">
+              <svg id="core-mic-svg" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8">
+                <rect x="9" y="2" width="6" height="12" rx="3"/>
+                <path d="M5 10a7 7 0 0014 0M12 17v5M8 22h8" stroke-linecap="round"/>
+              </svg>
+            </span>
+          </button>
+
+          <div class="core-telemetry">
+            <p id="core-status-label" class="core-status-label">OCIOSO</p>
+            <p id="core-substatus" class="core-substatus">Toque no núcleo para falar</p>
+          </div>
+        </div>
+
+        <!-- Botão de Interrupção de Fala (destacado quando TTS está ativo) -->
+        <button id="interrupt-speech-btn" type="button" class="interrupt-btn hidden">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+            <rect x="6" y="6" width="12" height="12" rx="2"/>
+          </svg>
+          <span>Interromper Fala</span>
+        </button>
+
+        <!-- Controles de Voz otimizados para Tablet -->
+        <div class="voice-controls" aria-label="Controles de voz">
+          <button id="handsfree-btn" type="button" class="control-chip" aria-pressed="false" title="Escuta contínua automática">
+            <span class="chip-indicator"></span>
+            <span>Contínuo</span>
+          </button>
+
+          <button id="mute-btn-panel" type="button" class="control-chip" aria-pressed="false" title="Ativar ou desativar áudio de resposta">
+            <span class="chip-indicator"></span>
+            <span id="mute-label">Voz Ativa</span>
+          </button>
+
+          <label class="speed-control" for="tts-rate-select" title="Velocidade da voz">
+            <span class="speed-prefix">Vel.</span>
+            <select id="tts-rate-select" aria-label="Velocidade da voz">
+              <option value="0.9">0.9x</option>
+              <option value="1.0">1.0x</option>
+              <option value="1.12" selected>1.1x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.4">1.4x</option>
+            </select>
+          </label>
+        </div>
+
+        <!-- Atalhos Rápidos -->
+        <div class="shortcuts-section">
+          <p class="section-caption">Atalhos Rápidos</p>
+          <div class="shortcuts-grid">
+            <button type="button" class="shortcut-btn" data-prompt="Faça um resumo executivo do meu dia considerando a data/hora atual, minhas tarefas pendentes prioritárias e memórias relevantes.">
+              <span class="shortcut-icon" aria-hidden="true">◎</span>
+              <span class="shortcut-text">
+                <strong>Resumo do Dia</strong>
+                <small>Briefing estratégico</small>
+              </span>
+            </button>
+
+            <button type="button" class="shortcut-btn" data-open-tab="tasks">
+              <span class="shortcut-icon" aria-hidden="true">☑</span>
+              <span class="shortcut-text">
+                <strong>Minhas Tarefas</strong>
+                <small id="stat-tasks-sub">0 pendentes</small>
+              </span>
+            </button>
+
+            <button type="button" class="shortcut-btn" data-open-tab="notes">
+              <span class="shortcut-icon" aria-hidden="true">▤</span>
+              <span class="shortcut-text">
+                <strong>Notas Salvas</strong>
+                <small id="stat-notes-sub">0 anotações</small>
+              </span>
+            </button>
+
+            <button type="button" class="shortcut-btn" data-open-tab="memories">
+              <span class="shortcut-icon" aria-hidden="true">◈</span>
+              <span class="shortcut-text">
+                <strong>Memória Ativa</strong>
+                <small id="stat-memories-sub">0 registros</small>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <footer class="core-footer">
+          <span id="model-tag" class="mono-meta">gemini-2.5-flash</span>
+          <span id="voice-name-tag" class="mono-meta">TTS pt-BR</span>
+        </footer>
+      </aside>
+
+      <!-- PAINEL DIREITO / INFERIOR: CHAT EM MARKDOWN + MULTIMODAL -->
+      <main id="chat-panel" class="hud-chat-panel" aria-label="Conversa com J.A.R.V.I.S.">
+        <div id="drop-overlay" class="drop-overlay hidden" aria-hidden="true">
+          <div class="drop-overlay-box">
+            <p>Solte o PDF ou imagem para o J.A.R.V.I.S. analisar</p>
+          </div>
+        </div>
+
+        <div id="messages-list" class="messages-list" role="log" aria-live="polite">
+          <!-- Mensagens renderizadas dinamicamente -->
+        </div>
+
+        <!-- Barra de pré-visualização de anexo -->
+        <div id="attachment-bar" class="attachment-bar hidden">
+          <div class="attachment-preview-info">
+            <img id="attachment-thumb" class="attachment-thumb hidden" alt="Prévia da imagem anexada">
+            <span id="attachment-file-badge" class="attachment-file-badge hidden">PDF</span>
+            <div class="attachment-meta">
+              <span id="attachment-name" class="attachment-name"></span>
+              <span id="attachment-size" class="attachment-size"></span>
+            </div>
+          </div>
+          <button id="remove-attachment-btn" type="button" class="icon-btn" aria-label="Remover anexo" title="Remover anexo">
+            ✕
+          </button>
+        </div>
+
+        <!-- Barra de entrada (Texto + Anexo + Microfone + Enviar) -->
+        <form id="chat-form" class="composer-bar" autocomplete="off">
+          <input
+            id="file-input"
+            type="file"
+            class="hidden"
+            accept="image/*,application/pdf,.txt,.md,.csv,.json"
+          >
+
+          <button
+            id="attach-btn"
+            type="button"
+            class="composer-icon-btn"
+            title="Anexar PDF, foto ou print"
+            aria-label="Anexar arquivo PDF ou imagem"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+              <path d="M21.44 11.05l-8.49 8.49a6 6 0 01-8.49-8.49l8.49-8.49a4 4 0 015.66 5.66l-8.49 8.49a2 2 0 01-2.83-2.83l7.78-7.78" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+
+          <textarea
+            id="message-input"
+            rows="1"
+            placeholder="Envie uma instrução, pergunte algo ou anexe um documento..."
+            aria-label="Mensagem para J.A.R.V.I.S."
+          ></textarea>
+
+          <button
+            id="composer-mic-btn"
+            type="button"
+            class="composer-icon-btn"
+            title="Falar por voz"
+            aria-label="Ativar microfone"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="9" y="2" width="6" height="12" rx="3"/>
+              <path d="M5 10a7 7 0 0014 0M12 17v5M8 22h8" stroke-linecap="round"/>
+            </svg>
+          </button>
+
+          <button
+            id="send-btn"
+            type="submit"
+            class="send-btn"
+            title="Enviar mensagem"
+            aria-label="Enviar mensagem"
+          >
+            <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- GAVETA LATERAL (DRAWER): TAREFAS, MEMÓRIAS E NOTAS                  -->
+  <!-- =================================================================== -->
+  <div id="drawer-backdrop" class="drawer-backdrop hidden" aria-hidden="true"></div>
+  <aside id="hud-drawer" class="hud-drawer" aria-label="Painel de dados persistentes" aria-hidden="true">
+    <div class="drawer-header">
+      <div class="drawer-tabs" role="tablist">
+        <button type="button" class="drawer-tab active" data-tab="tasks" role="tab" aria-selected="true">Tarefas</button>
+        <button type="button" class="drawer-tab" data-tab="memories" role="tab" aria-selected="false">Memórias</button>
+        <button type="button" class="drawer-tab" data-tab="notes" role="tab" aria-selected="false">Notas</button>
+      </div>
+      <button id="drawer-close-btn" type="button" class="icon-btn" aria-label="Fechar painel">✕</button>
+    </div>
+
+    <div class="drawer-body">
+      <!-- ABA TAREFAS -->
+      <section id="tab-tasks" class="tab-panel active">
+        <form id="quick-task-form" class="drawer-form">
+          <input id="task-title-input" type="text" placeholder="Nova tarefa..." required>
+          <div class="drawer-form-row">
+            <input id="task-deadline-input" type="text" placeholder="Prazo (ex.: amanhã 18h)">
+            <select id="task-priority-select" aria-label="Prioridade">
+              <option value="alta">Alta</option>
+              <option value="média" selected>Média</option>
+              <option value="baixa">Baixa</option>
+            </select>
+            <button type="submit" class="btn-accent">Adicionar</button>
+          </div>
+        </form>
+        <div id="tasks-list" class="records-list"></div>
+      </section>
+
+      <!-- ABA MEMÓRIAS -->
+      <section id="tab-memories" class="tab-panel">
+        <form id="quick-memory-form" class="drawer-form">
+          <div class="drawer-form-row">
+            <input id="memory-key-input" type="text" placeholder="Chave (ex.: cafe_preferido)" required>
+            <input id="memory-cat-input" type="text" placeholder="Categoria" value="pessoal">
+          </div>
+          <div class="drawer-form-row">
+            <input id="memory-val-input" type="text" placeholder="Valor / informação permanente..." required>
+            <button type="submit" class="btn-accent">Salvar</button>
+          </div>
+        </form>
+        <input id="memory-search-input" class="search-input" type="search" placeholder="Filtrar memórias...">
+        <div id="memories-list" class="records-list"></div>
+      </section>
+
+      <!-- ABA NOTAS -->
+      <section id="tab-notes" class="tab-panel">
+        <form id="quick-note-form" class="drawer-form">
+          <div class="drawer-form-row">
+            <input id="note-title-input" type="text" placeholder="Título da nota..." required>
+            <input id="note-tag-input" type="text" placeholder="Tag" value="geral">
+          </div>
+          <textarea id="note-content-input" rows="3" placeholder="Conteúdo da anotação..." required></textarea>
+          <button type="submit" class="btn-accent full-width">Salvar Nota</button>
+        </form>
+        <div id="notes-list" class="records-list"></div>
+      </section>
+    </div>
+  </aside>
+
+  <!-- Toast de feedback -->
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>
