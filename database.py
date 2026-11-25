@@ -96,6 +96,19 @@ def init_db() -> None:
             );
 
             CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+
+            CREATE TABLE IF NOT EXISTS google_tokens (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                token TEXT NOT NULL,
+                refresh_token TEXT,
+                token_uri TEXT NOT NULL DEFAULT 'https://oauth2.googleapis.com/token',
+                client_id TEXT,
+                client_secret TEXT,
+                scopes_json TEXT NOT NULL DEFAULT '[]',
+                expiry TEXT,
+                email TEXT,
+                updated_at TEXT NOT NULL
+            );
             """
         )
 
@@ -460,3 +473,87 @@ def get_stats() -> dict[str, int]:
             "notas": total_notes,
             "mensagens": total_messages,
         }
+
+
+# ---------------------------------------------------------------------------
+# Tokens OAuth 2.0 do Google
+# ---------------------------------------------------------------------------
+
+
+def save_google_tokens(
+    token: str,
+    refresh_token: str | None = None,
+    token_uri: str = "https://oauth2.googleapis.com/token",
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    scopes: list[str] | tuple[str, ...] | None = None,
+    expiry: str | None = None,
+    email: str | None = None,
+) -> dict[str, Any]:
+    """Salva ou atualiza os tokens OAuth 2.0 do Google na tabela google_tokens."""
+    ts = now_iso()
+    scopes_json = json.dumps(list(scopes or []), ensure_ascii=False)
+
+    with get_connection() as conn:
+        existing = conn.execute("SELECT refresh_token, email FROM google_tokens WHERE id = 1").fetchone()
+        effective_refresh = refresh_token or (existing["refresh_token"] if existing else None)
+        effective_email = email or (existing["email"] if existing else None)
+
+        conn.execute(
+            """
+            INSERT INTO google_tokens (
+                id, token, refresh_token, token_uri, client_id, client_secret,
+                scopes_json, expiry, email, updated_at
+            )
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                token = excluded.token,
+                refresh_token = excluded.refresh_token,
+                token_uri = excluded.token_uri,
+                client_id = excluded.client_id,
+                client_secret = excluded.client_secret,
+                scopes_json = excluded.scopes_json,
+                expiry = excluded.expiry,
+                email = excluded.email,
+                updated_at = excluded.updated_at
+            """,
+            (
+                token,
+                effective_refresh,
+                token_uri or "https://oauth2.googleapis.com/token",
+                client_id,
+                client_secret,
+                scopes_json,
+                expiry,
+                effective_email,
+                ts,
+            ),
+        )
+        row = conn.execute("SELECT * FROM google_tokens WHERE id = 1").fetchone()
+        return _deserialize_google_tokens(row)
+
+
+def _deserialize_google_tokens(row: sqlite3.Row) -> dict[str, Any]:
+    data = dict(row)
+    raw_scopes = data.pop("scopes_json", "[]")
+    try:
+        data["scopes"] = json.loads(raw_scopes) if raw_scopes else []
+    except Exception:
+        data["scopes"] = []
+    return data
+
+
+def get_google_tokens() -> dict[str, Any] | None:
+    """Recupera os tokens OAuth 2.0 do Google salvos no SQLite."""
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM google_tokens WHERE id = 1").fetchone()
+        if not row:
+            return None
+        return _deserialize_google_tokens(row)
+
+
+def delete_google_tokens() -> bool:
+    """Remove os tokens OAuth 2.0 do Google armazenados."""
+    with get_connection() as conn:
+        cur = conn.execute("DELETE FROM google_tokens WHERE id = 1")
+        return cur.rowcount > 0

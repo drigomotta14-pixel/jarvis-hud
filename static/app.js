@@ -32,6 +32,11 @@
   const state = {
     pin: localStorage.getItem(STORAGE.PIN) || "",
     selectedModel: getStoredModel() || DEFAULT_MODEL,
+    googleAuth: {
+      connected: false,
+      configured: false,
+      email: null,
+    },
     coreStatus: "idle", // idle | listening | processing | speaking
     muted: localStorage.getItem(STORAGE.MUTED) === "true",
     ttsRate: parseFloat(localStorage.getItem(STORAGE.RATE) || "1.12") || 1.12,
@@ -69,6 +74,8 @@
     brtClock: document.getElementById("brt-clock"),
     modelSelect: document.getElementById("model-select"),
     apiWarningChip: document.getElementById("api-warning-chip"),
+    googleAuthBtn: document.getElementById("google-auth-btn"),
+    googleAuthLabel: document.getElementById("google-auth-label"),
     installPwaBtn: document.getElementById("install-pwa-btn"),
     drawerToggleBtn: document.getElementById("drawer-toggle-btn"),
     pendingBadge: document.getElementById("pending-badge"),
@@ -523,24 +530,88 @@
   function pickBestPtBrVoice() {
     if (!("speechSynthesis" in window)) return null;
     const voices = window.speechSynthesis.getVoices() || [];
-    const ptBr = voices.filter((v) =>
-      (v.lang || "").toLowerCase().replace("_", "-").startsWith("pt-br")
-    );
-    const pool = ptBr.length
-      ? ptBr
-      : voices.filter((v) => (v.lang || "").toLowerCase().startsWith("pt"));
+    const normalizeLang = (lang) => (lang || "").toLowerCase().replace("_", "-");
+    const normalizeName = (name) =>
+      (name || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+    const ptRegional = voices.filter((v) => {
+      const l = normalizeLang(v.lang);
+      return l.startsWith("pt-br") || l.startsWith("pt-pt");
+    });
+    const pool = ptRegional.length
+      ? ptRegional
+      : voices.filter((v) => normalizeLang(v.lang).startsWith("pt"));
 
     if (!pool.length) return null;
 
-    // Prioriza vozes naturais de alta qualidade no Android/Chrome/Edge
+    const malePatterns = [
+      /\bdaniel\b/,
+      /\bfelipe\b/,
+      /\bantonio\b/,
+      /\bricardo\b/,
+      /\bfabio\b/,
+      /\bhumberto\b/,
+      /\bnicolau\b/,
+      /\bduarte\b/,
+      /\bjulio\b/,
+      /\bdonato\b/,
+      /\bvalerio\b/,
+      /\btiago\b/,
+      /\bpedro\b/,
+      /\bcarlos\b/,
+      /\blucas\b/,
+      /\bmale\b/,
+      /\bmasculin[oa]\b/,
+      /\bhomem\b/,
+      /pt-br-x-ptd/,
+      /pt-br-x-pte/,
+    ];
+
+    const femalePatterns = [
+      /\bluciana\b/,
+      /\bfrancisca\b/,
+      /\bmaria\b/,
+      /\bfernanda\b/,
+      /\bvitoria\b/,
+      /\braquel\b/,
+      /\bthalita\b/,
+      /\bbrenda\b/,
+      /\belza\b/,
+      /\bgiovanna\b/,
+      /\bleila\b/,
+      /\bleticia\b/,
+      /\bmanuela\b/,
+      /\byara\b/,
+      /\bines\b/,
+      /\bjoana\b/,
+      /\bhelena\b/,
+      /\bfemale\b/,
+      /\bfeminin[oa]\b/,
+      /\bmulher\b/,
+      /pt-br-x-afs/,
+    ];
+
+    // Prioriza vozes masculinas em pt-BR/pt-PT mantendo fallback para qualquer voz em português
     const ranked = [...pool].sort((a, b) => {
       const score = (v) => {
-        const n = (v.name || "").toLowerCase();
+        const l = normalizeLang(v.lang);
+        const n = normalizeName(v.name);
+        const uri = normalizeName(v.voiceURI);
+        const haystack = `${n} ${uri}`;
         let s = 0;
-        if (n.includes("google") && n.includes("portugu")) s += 30;
-        if (n.includes("neural") || n.includes("natural")) s += 25;
-        if (n.includes("daniel") || n.includes("antonio") || n.includes("fabio")) s += 12;
-        if (n.includes("luciana") || n.includes("francisca")) s += 10;
+
+        const isMale = malePatterns.some((re) => re.test(haystack));
+        const isFemale = !isMale && femalePatterns.some((re) => re.test(haystack));
+
+        if (isMale) s += 100;
+        if (isFemale) s -= 30;
+        if (l.startsWith("pt-br")) s += 25;
+        else if (l.startsWith("pt-pt")) s += 15;
+        if (haystack.includes("neural") || haystack.includes("natural") || haystack.includes("online")) s += 20;
+        if (haystack.includes("google") && haystack.includes("portugu")) s += 12;
         if (v.localService) s += 4;
         return s;
       };
@@ -1272,11 +1343,66 @@
     el.statMemoriesSub.textContent = `${m} ${m === 1 ? "registro" : "registros"}`;
   }
 
+  function updateGoogleAuthUI() {
+    if (!el.googleAuthBtn || !el.googleAuthLabel) return;
+    const connected = Boolean(state.googleAuth.connected);
+    el.googleAuthBtn.classList.toggle("connected", connected);
+    el.googleAuthLabel.textContent = connected ? "Google Conectado" : "Conectar Google";
+    if (connected) {
+      const account = state.googleAuth.email ? ` (${state.googleAuth.email})` : "";
+      el.googleAuthBtn.title = `Google Conectado${account} — clique para reconectar ou atualizar permissões`;
+      el.googleAuthBtn.setAttribute("aria-label", `Google Conectado${account}`);
+    } else if (state.googleAuth.configured) {
+      el.googleAuthBtn.title = "Conectar conta Google (Agenda, Gmail, Drive e Tarefas)";
+      el.googleAuthBtn.setAttribute("aria-label", "Conectar conta Google");
+    } else {
+      el.googleAuthBtn.title = "Configure GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET no servidor para conectar";
+      el.googleAuthBtn.setAttribute("aria-label", "Conectar conta Google");
+    }
+  }
+
+  async function refreshGoogleAuthStatus() {
+    try {
+      const resp = await fetch("/auth/status", { cache: "no-store" });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      state.googleAuth = {
+        connected: Boolean(data.connected),
+        configured: Boolean(data.configured),
+        email: data.email || null,
+      };
+      updateGoogleAuthUI();
+    } catch (_err) {
+      // Silencioso em verificação de fundo
+    }
+  }
+
+  function handleGoogleAuthCallbackParams() {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get("google_auth");
+    if (!result) return;
+    const reason = params.get("reason") || "";
+    if (result === "success") {
+      showToast("Conta Google conectada com sucesso!", 3600);
+    } else if (result === "error") {
+      showToast(
+        reason ? `Falha ao conectar Google: ${reason}` : "Falha ao conectar conta Google.",
+        4200
+      );
+    }
+    params.delete("google_auth");
+    params.delete("reason");
+    const cleanQuery = params.toString();
+    const cleanUrl = `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ""}${window.location.hash}`;
+    window.history.replaceState({}, document.title, cleanUrl);
+  }
+
   async function loadInitialData() {
     try {
       const [hist] = await Promise.all([
         apiFetch("/api/history?limit=40"),
         refreshDrawerData(),
+        refreshGoogleAuthStatus(),
       ]);
 
       el.messagesList.innerHTML = "";
@@ -1464,6 +1590,26 @@
         syncModelUI();
         const label = el.modelSelect.options[el.modelSelect.selectedIndex]?.textContent || chosen;
         showToast(`Modelo ativo: ${label}`);
+      });
+    }
+
+    if (el.googleAuthBtn) {
+      el.googleAuthBtn.addEventListener("click", () => {
+        if (!state.googleAuth.configured && !state.googleAuth.connected) {
+          showToast(
+            "Configure GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REDIRECT_URI no servidor.",
+            4200
+          );
+          return;
+        }
+        if (state.googleAuth.connected) {
+          const account = state.googleAuth.email ? ` (${state.googleAuth.email})` : "";
+          const reconnect = confirm(
+            `Sua conta Google${account} já está conectada. Deseja reconectar ou atualizar as permissões?`
+          );
+          if (!reconnect) return;
+        }
+        window.location.href = "/auth/google";
       });
     }
 
@@ -1738,9 +1884,12 @@
     bindEvents();
     syncVoiceControlsUI();
     syncModelUI();
+    updateGoogleAuthUI();
+    handleGoogleAuthCallbackParams();
     startBrtClock();
     startCoreCanvasLoop();
     registerServiceWorker();
+    refreshGoogleAuthStatus();
 
     if ("speechSynthesis" in window) {
       refreshVoices();

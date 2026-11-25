@@ -1,5 +1,5 @@
 /* Service Worker do J.A.R.V.I.S. PWA */
-const CACHE_NAME = "jarvis-hud-v2";
+const CACHE_NAME = "jarvis-hud-v3";
 const APP_SHELL = [
   "/",
   "/manifest.json",
@@ -34,8 +34,13 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Nunca armazena em cache chamadas da API ou métodos mutáveis
-  if (request.method !== "GET" || url.pathname.startsWith("/api/") || url.pathname === "/health") {
+  // Nunca armazena em cache chamadas da API, OAuth ou métodos mutáveis
+  if (
+    request.method !== "GET" ||
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/auth/") ||
+    url.pathname === "/health"
+  ) {
     return;
   }
 

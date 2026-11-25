@@ -9,12 +9,13 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
@@ -22,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 import database
+import google_services
 import tools
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -115,6 +117,12 @@ def build_system_instruction(voice_mode: bool) -> str:
         "- Quando o usuário mencionar algo que precisa fazer, crie a pendência com `adicionar_tarefa`; "
         "quando informar que finalizou algo, conclua com `concluir_tarefa`.\n"
         "- Quando pedir para anotar uma ideia, ata ou resumo de documento/estudo, use `salvar_nota`.\n"
+        "- Quando o usuário perguntar sobre compromissos, agenda, reuniões, e-mails, arquivos no Drive "
+        "ou tarefas do Google, utilize as ferramentas Google (`listar_eventos_agenda`, `criar_evento_agenda`, "
+        "`buscar_emails`, `ler_email`, `criar_rascunho_email`, `buscar_arquivos_drive`, `gerenciar_google_tarefas`). "
+        "Se alguma retornar `autenticacao_necessaria: true`, oriente-o a clicar em 'Conectar Google' no topo do HUD.\n"
+        "- Quando precisar de informações atualizadas, notícias, cotações, previsão do tempo ou fatos recentes, "
+        "use `pesquisar_web`.\n"
         "- Sempre confirme brevemente as ações executadas em ferramentas.\n\n"
         "ANÁLISE MULTIMODAL:\n"
         "- Ao receber PDFs, imagens, prints ou documentos, analise-os com rigor técnico: "
@@ -149,11 +157,13 @@ def build_system_instruction(voice_mode: bool) -> str:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     database.init_db()
+    google_cfg = google_services.get_google_oauth_config()
     logger.info(
-        "J.A.R.V.I.S. inicializado | Modelo ativo: %s | Modelos permitidos: %s | API Key configurada: %s | DB: %s",
+        "J.A.R.V.I.S. inicializado | Modelo ativo: %s | Modelos permitidos: %s | API Key configurada: %s | Google OAuth configurado: %s | DB: %s",
         get_gemini_model(),
         ", ".join(ALLOWED_GEMINI_MODELS),
         bool(get_gemini_api_key()),
+        google_cfg["configured"],
         database.DB_PATH,
     )
     yield
@@ -417,6 +427,76 @@ async def serve_service_worker() -> FileResponse:
             "Service-Worker-Allowed": "/",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Rotas Google OAuth 2.0 (/auth/google, /auth/callback, /auth/status)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/auth/google")
+async def auth_google(request: Request) -> RedirectResponse:
+    fallback_redirect = str(request.url_for("auth_google_callback"))
+    try:
+        authorization_url, _state = google_services.start_oauth_flow(
+            fallback_redirect_uri=fallback_redirect
+        )
+    except google_services.GoogleOAuthConfigError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return RedirectResponse(url=authorization_url, status_code=status.HTTP_302_FOUND)
+
+
+@app.get("/auth/callback", name="auth_google_callback")
+async def auth_google_callback(
+    request: Request,
+    code: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    error: str | None = Query(default=None),
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse(
+            url=f"/?google_auth=error&reason={quote(error)}",
+            status_code=status.HTTP_302_FOUND,
+        )
+    if not code:
+        return RedirectResponse(
+            url="/?google_auth=error&reason=missing_code",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    fallback_redirect = str(request.url_for("auth_google_callback"))
+    try:
+        await run_in_threadpool(
+            google_services.exchange_code_for_tokens,
+            code,
+            state,
+            fallback_redirect,
+        )
+    except Exception as exc:
+        logger.exception("Erro no callback OAuth 2.0 do Google")
+        return RedirectResponse(
+            url=f"/?google_auth=error&reason={quote(str(exc)[:180])}",
+            status_code=status.HTTP_302_FOUND,
+        )
+
+    return RedirectResponse(
+        url="/?google_auth=success",
+        status_code=status.HTTP_302_FOUND,
+    )
+
+
+@app.get("/auth/status")
+async def auth_google_status(request: Request) -> dict[str, Any]:
+    fallback_redirect = str(request.url_for("auth_google_callback"))
+    _creds, status_info = await run_in_threadpool(
+        google_services.get_valid_credentials,
+        True,
+        fallback_redirect,
+    )
+    return status_info
 
 
 # ---------------------------------------------------------------------------

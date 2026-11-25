@@ -473,6 +473,35 @@ button {
   border-color: var(--border-strong);
 }
 
+.google-auth-btn {
+  white-space: nowrap;
+}
+
+.google-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.google-auth-btn.connected {
+  background: rgba(46, 229, 157, 0.11);
+  border-color: rgba(46, 229, 157, 0.38);
+  color: var(--status-ok);
+}
+
+.google-auth-btn.connected:hover {
+  background: rgba(46, 229, 157, 0.18);
+  border-color: rgba(46, 229, 157, 0.58);
+}
+
+.google-auth-btn.connected .google-status-dot {
+  background: var(--status-ok);
+  box-shadow: 0 0 8px rgba(46, 229, 157, 0.55);
+}
+
 .badge-count {
   min-width: 19px;
   height: 19px;
@@ -1741,7 +1770,7 @@ button {
     font-size: 0.7rem;
   }
 
-  .icon-pill span:not(.badge-count) {
+  .icon-pill span:not(.badge-count):not(.google-status-dot) {
     display: none;
   }
 }
